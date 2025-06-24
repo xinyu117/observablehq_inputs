@@ -132,6 +132,9 @@ function createComboBox(form, input, listContainer, value, selectedValue, {
     visibleOptions = filterOptions(listContainer, input.value);
     currentIndex = -1;
     highlightOption(currentIndex);
+    if (listContainer.style.display === "block") {
+      positionDropdown();
+    }
     if (submit) {
       button.disabled = input.value === value;
       event.stopPropagation();
@@ -213,19 +216,51 @@ export function comboBox({
   ...options
 } = {}) {
   const input = html`<input type="text" class="__ns__-input __ns__-combobox-input" placeholder=${placeholder || "Type or select..."} disabled=${disabled === true} name="input">`;
-  const listContainer = html`<div class="__ns__-combobox-list" style="display: none;">
+  const listContainer = html`<div class="__ns__-combobox-list" style="display: none; position: fixed; z-index: 9999; max-height: 200px; overflow-y: auto; background: white; border: 1px solid #ccc; box-shadow: 0 2px 8px rgba(0,0,0,0.1); border-radius: 4px;">
     ${data.map((d, i) => renderOptions(d, i, disabled, format))}
   </div>`;
   
-  const form = html`<form class="__ns__ __ns__-combobox" style=${maybeWidth(width)}>
+  const form = html`<form class="__ns__ __ns__-combobox" style="${maybeWidth(width)}">
     ${maybeLabel(label, input)}
     ${input}
-    ${listContainer}
   </form>`;
   
+  // 定位下拉列表的函数
+  function positionDropdown() {
+    const inputRect = input.getBoundingClientRect();
+    const viewportHeight = window.innerHeight;
+    
+    // 使用固定定位，相对于视口
+    let top = inputRect.bottom;
+    const left = inputRect.left;
+    const width = inputRect.width;
+    
+    // 检查是否有足够空间显示在下方，否则显示在上方
+    const dropdownMaxHeight = 200;
+    const spaceBelow = viewportHeight - inputRect.bottom;
+    const spaceAbove = inputRect.top;
+    
+    if (spaceBelow < dropdownMaxHeight && spaceAbove > spaceBelow) {
+      // 显示在输入框上方
+      top = inputRect.top - Math.min(dropdownMaxHeight, spaceAbove);
+      listContainer.style.maxHeight = `${Math.min(dropdownMaxHeight, spaceAbove)}px`;
+    } else {
+      // 显示在输入框下方
+      listContainer.style.maxHeight = `${Math.min(dropdownMaxHeight, spaceBelow)}px`;
+    }
+    
+    listContainer.style.top = `${top}px`;
+    listContainer.style.left = `${left}px`;
+    listContainer.style.width = `${width}px`;
+  }
+
+  // 将下拉列表添加到body，确保不受任何父容器影响
+  document.body.appendChild(listContainer);
+
   // 添加事件监听器
   input.addEventListener("focus", () => {
     filterOptions(listContainer, input.value);
+    positionDropdown();
     listContainer.style.display = "block";
   });
 
@@ -244,6 +279,49 @@ export function comboBox({
       input.dispatchEvent(new Event('input', { bubbles: true }));
     }
   });
+
+  // 事件监听器引用，用于清理
+  const resizeHandler = () => {
+    if (listContainer.style.display === "block") {
+      positionDropdown();
+    }
+  };
+
+  const scrollHandler = () => {
+    if (listContainer.style.display === "block") {
+      positionDropdown();
+    }
+  };
+
+  // 监听窗口大小改变和滚动事件
+  window.addEventListener("resize", resizeHandler);
+  window.addEventListener("scroll", scrollHandler, true); // true表示在捕获阶段监听
+
+  // 清理函数
+  const cleanup = () => {
+    if (listContainer.parentNode) {
+      listContainer.parentNode.removeChild(listContainer);
+    }
+    window.removeEventListener("resize", resizeHandler);
+    window.removeEventListener("scroll", scrollHandler, true);
+  };
+
+  // 当form被移除时，清理下拉列表
+  const observer = new MutationObserver((mutations) => {
+    mutations.forEach((mutation) => {
+      mutation.removedNodes.forEach((node) => {
+        if (node === form || node.contains && node.contains(form)) {
+          cleanup();
+          observer.disconnect();
+        }
+      });
+    });
+  });
+
+  // 开始观察DOM变化
+  if (form.parentNode) {
+    observer.observe(document.body, { childList: true, subtree: true });
+  }
   
   return createComboBox(form, input, listContainer, value, selectedValue, options);
 }
