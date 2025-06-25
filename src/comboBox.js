@@ -51,9 +51,13 @@ function levenshteinDistance(a, b) {
   return matrix[b.length][a.length];
 }
 
-function filterOptions(listContainer, value, threshold = 3) {
+function filterOptions(listContainer, value, threshold = 3, positionCallback = null) {
   if (value == null || value === "") {
     resetOptionsDisplay(listContainer);
+    // 重新定位以适应高度变化
+    if (positionCallback) {
+      requestAnimationFrame(positionCallback);
+    }
     return;
   }
   value = value.toLowerCase();
@@ -69,6 +73,12 @@ function filterOptions(listContainer, value, threshold = 3) {
     const visibleGroupOptions = Array.from(group.querySelectorAll('.__ns__-combobox-option')).filter(option => option.style.display !== "none");
     group.style.display = visibleGroupOptions.length > 0 ? "block" : "none";
   });
+  
+  // 过滤后重新定位以适应高度变化
+  if (positionCallback) {
+    requestAnimationFrame(positionCallback);
+  }
+  
   return visibleOptions;
 }
 
@@ -99,7 +109,13 @@ async function checkAndShowDialog(input, listContainer) {
 function createComboBox(form, input, listContainer, value, selectedValue, {
   validate = checkValidity,
   submit,
-  data
+  data,
+  positionDropdown,
+  currentIndex,
+  visibleOptions,
+  highlightOption,
+  setCurrentIndex,
+  setVisibleOptions
 } = {}) {
   submit = submit === true ? "Submit" : submit || null;
   const button = submit ? html`<button type=submit disabled>${submit}` : null;
@@ -107,7 +123,7 @@ function createComboBox(form, input, listContainer, value, selectedValue, {
   input.value = stringify(selectedValue);
   value = validate(input) ? input.value : undefined;
   form.addEventListener("submit", onsubmit);
-  input.oninput = oninput;
+  input.addEventListener("input", oninput);
   
   function update() {
     if (validate(input)) {
@@ -129,12 +145,11 @@ function createComboBox(form, input, listContainer, value, selectedValue, {
   }
   
   function oninput(event) {
-    visibleOptions = filterOptions(listContainer, input.value);
-    currentIndex = -1;
-    highlightOption(currentIndex);
-    if (listContainer.style.display === "block") {
-      positionDropdown();
-    }
+    const newVisibleOptions = filterOptions(listContainer, input.value, 3, 
+      listContainer.style.display === "block" ? positionDropdown : null);
+    setVisibleOptions(newVisibleOptions);
+    setCurrentIndex(-1);
+    highlightOption(-1);
     if (submit) {
       button.disabled = input.value === value;
       event.stopPropagation();
@@ -142,22 +157,15 @@ function createComboBox(form, input, listContainer, value, selectedValue, {
       event.stopPropagation();
     }
   }
-  
-  let currentIndex = -1;
-  let visibleOptions = [];
-
-  function highlightOption(index) {
-    visibleOptions.forEach((option, i) => {
-      option.classList.toggle('__ns__-combobox-option-highlighted', i === index);
-    });
-  }
 
   input.addEventListener('keydown', async (event) => {
     if (event.key === 'Enter') {
       event.preventDefault();
-      if (currentIndex >= 0 && currentIndex < visibleOptions.length) {
-        input.value = visibleOptions[currentIndex].textContent.trim();
-        value = visibleOptions[currentIndex].dataset.value;
+      const currentIdx = currentIndex();
+      const visibleOpts = visibleOptions();
+      if (currentIdx >= 0 && currentIdx < visibleOpts.length) {
+        input.value = visibleOpts[currentIdx].textContent.trim();
+        value = visibleOpts[currentIdx].dataset.value;
         listContainer.style.display = "none";
         resetOptionsDisplay(listContainer);
         input.dispatchEvent(new Event('input', { bubbles: true }));
@@ -166,15 +174,19 @@ function createComboBox(form, input, listContainer, value, selectedValue, {
       }
     } else if (event.key === 'ArrowDown') {
       event.preventDefault();
-      if (visibleOptions.length > 0) {
-        currentIndex = (currentIndex + 1) % visibleOptions.length;
-        highlightOption(currentIndex);
+      const visibleOpts = visibleOptions();
+      if (visibleOpts.length > 0) {
+        const newIndex = (currentIndex() + 1) % visibleOpts.length;
+        setCurrentIndex(newIndex);
+        highlightOption(newIndex);
       }
     } else if (event.key === 'ArrowUp') {
       event.preventDefault();
-      if (visibleOptions.length > 0) {
-        currentIndex = (currentIndex - 1 + visibleOptions.length) % visibleOptions.length;
-        highlightOption(currentIndex);
+      const visibleOpts = visibleOptions();
+      if (visibleOpts.length > 0) {
+        const newIndex = (currentIndex() - 1 + visibleOpts.length) % visibleOpts.length;
+        setCurrentIndex(newIndex);
+        highlightOption(newIndex);
       }
     }
   });
@@ -240,18 +252,44 @@ export function comboBox({
     const spaceBelow = viewportHeight - inputRect.bottom;
     const spaceAbove = inputRect.top;
     
-    if (spaceBelow < dropdownMaxHeight && spaceAbove > spaceBelow) {
+    const shouldShowAbove = spaceBelow < dropdownMaxHeight && spaceAbove > spaceBelow;
+    
+    if (shouldShowAbove) {
       // 显示在输入框上方
-      top = inputRect.top - Math.min(dropdownMaxHeight, spaceAbove);
       listContainer.style.maxHeight = `${Math.min(dropdownMaxHeight, spaceAbove)}px`;
+      
+      // 先设置位置，然后根据实际高度调整
+      listContainer.style.top = `${inputRect.top - Math.min(dropdownMaxHeight, spaceAbove)}px`;
+      listContainer.style.left = `${left}px`;
+      listContainer.style.width = `${width}px`;
+      
+      // 使用 requestAnimationFrame 确保DOM更新后获取准确高度
+      requestAnimationFrame(() => {
+        const actualHeight = listContainer.scrollHeight;
+        const maxAllowedHeight = Math.min(dropdownMaxHeight, spaceAbove);
+        const finalHeight = Math.min(actualHeight, maxAllowedHeight);
+        
+        // 重新计算top位置，让下拉列表底部贴近输入框顶部
+        top = inputRect.top - finalHeight;
+        listContainer.style.top = `${top}px`;
+      });
     } else {
       // 显示在输入框下方
       listContainer.style.maxHeight = `${Math.min(dropdownMaxHeight, spaceBelow)}px`;
+      listContainer.style.top = `${top}px`;
+      listContainer.style.left = `${left}px`;
+      listContainer.style.width = `${width}px`;
     }
-    
-    listContainer.style.top = `${top}px`;
-    listContainer.style.left = `${left}px`;
-    listContainer.style.width = `${width}px`;
+  }
+
+  // 状态管理
+  let currentIndex = -1;
+  let visibleOptions = [];
+
+  function highlightOption(index) {
+    visibleOptions.forEach((option, i) => {
+      option.classList.toggle('__ns__-combobox-option-highlighted', i === index);
+    });
   }
 
   // 将下拉列表添加到body，确保不受任何父容器影响
@@ -259,7 +297,8 @@ export function comboBox({
 
   // 添加事件监听器
   input.addEventListener("focus", () => {
-    filterOptions(listContainer, input.value);
+    visibleOptions = filterOptions(listContainer, input.value, 3, positionDropdown);
+    currentIndex = -1;
     positionDropdown();
     listContainer.style.display = "block";
   });
@@ -276,6 +315,7 @@ export function comboBox({
       value = event.target.dataset.value;
       listContainer.style.display = "none";
       resetOptionsDisplay(listContainer);
+      currentIndex = -1;
       input.dispatchEvent(new Event('input', { bubbles: true }));
     }
   });
@@ -323,5 +363,13 @@ export function comboBox({
     observer.observe(document.body, { childList: true, subtree: true });
   }
   
-  return createComboBox(form, input, listContainer, value, selectedValue, options);
+  return createComboBox(form, input, listContainer, value, selectedValue, {
+    ...options,
+    positionDropdown,
+    currentIndex: () => currentIndex,
+    visibleOptions: () => visibleOptions,
+    highlightOption,
+    setCurrentIndex: (idx) => { currentIndex = idx; },
+    setVisibleOptions: (opts) => { visibleOptions = opts; }
+  });
 }
